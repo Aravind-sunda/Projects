@@ -1,0 +1,361 @@
+---
+title: "BF528 proj1"
+author: "eliza miller"
+date: "2023-02-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+#importing libraries
+library(tidyverse)
+library(BiocManager)
+library(org.Hs.eg.db)
+keytypes(org.Hs.eg.db)
+library(hgu133plus2.db)
+library(AnnotationDbi)
+```
+
+
+
+```{r}
+BiocManager::install()
+BiocManager::install('hgu133plus2.db')
+```
+
+##6.1
+
+
+
+```{r bioconductor-installation}
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install(version = "3.16")
+BiocManager::install("hgu133plus2.db")
+```
+
+
+
+```{r}
+#reading csv
+path <- '/Users/elizamiller/Downloads/5_6genestats.csv'
+
+expr_mat <- read.csv(path)
+
+#visualize data frame 
+(expr_mat)
+
+
+```
+```{r}
+probes <- expr_mat$PROBEID
+head(probes)
+```
+```{r}
+keytypes(hgu133plus2.db)
+```
+
+```{r}
+columns(hgu133plus2.db)
+```
+```{r}
+probes <- AnnotationDbi::select(hgu133plus2.db, keys = probes, columns = 'SYMBOL', keytype = 'PROBEID')
+probes <- probes[!duplicated(probes$PROBEID),]
+head(probes)
+
+```
+
+```{r}
+colnames(expr_mat)[1] <- 'PROBEID'
+head(expr_mat)
+```
+```{r}
+library('plyr')
+probes_x <- merge(expr_mat, probes, by = 'PROBEID')
+probes_y <- ddply(probes_x, 'SYMBOL', summarize, t_stat=mean(t_stat), p_val=mean(p_val), p_adj=mean(p_adj))
+probes_y <- na.omit(probes_y)
+library("dplyr")
+p_final <- probes_y %>%
+  dplyr::select(SYMBOL, everything())
+
+p_final
+```
+
+##6.3
+```{r}
+#order up and down regulated genes
+regulated <- p_final[order(p_final$t, decreasing=TRUE),]
+regulated_top <- head(regulated$SYMBOL, 1000)
+regulated_bottom <-tail(regulated$SYMBOL, 1000)
+```
+
+```{r}
+#select top 10 up and down-regulated genes
+top_ten<-head(regulated_top, 10)
+bottom_ten<-head(regulated_bottom, 10)
+
+top_ten
+bottom_ten
+```
+
+##6.4
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("GSEABase")
+```
+
+```{r}
+#read in GMT files
+library('GSEABase')
+library('tidyr')
+library('readr')
+```
+
+
+
+```{r}
+kegg_gmt <- getGmt(con='kegg.gmt')
+kegg_gmt
+```
+```{r}
+go_gmt <- getGmt(con='go.gmt')
+go_gmt
+```
+
+```{r}
+hallmark_gmt <- getGmt(con='hallmark.gmt')
+hallmark_gmt
+```
+
+
+##6.5 
+```{r for KEGG}
+
+de_genes <- regulated_top
+#define a function that takes a list of DE genes, and a specific GeneSet from a GeneSetCollection to generate a contingency table
+#using set operations in GSEABase
+make_contingency <- function(de_genes, GeneSetobj) {
+
+
+  #make our de list into a simple GeneSet object using GSEABase
+  de_geneset <- GeneSet(de_genes, setName='1000 DE genes')
+
+  #If we had the full results, we could determine this value without manually setting it
+  background_len <- length(probes_x$PROBEID)
+
+  #Calculate the values inside the contingency table using set operations
+  de_in <- length((de_geneset & GeneSetobj)@geneIds)
+  de_notin <- length(setdiff(de_geneset, GeneSetobj)@geneIds)
+  set_notde <- length(setdiff(GeneSetobj, de_geneset)@geneIds)
+  notin_notde <- background_len - (de_in + de_notin + set_notde)
+
+
+  #return a matrix of the contingency values
+  return(matrix(c(de_in, de_notin, set_notde, notin_notde), nrow=2))
+
+
+}
+make_contingency(de_genes, kegg_gmt[['KEGG_N_GLYCAN_BIOSYNTHESIS']])
+```
+
+
+
+```{r for KEGG up and down-regulated}
+KEGG_overlap <- data.frame(matrix(ncol = 3, nrow=0))
+
+colnames(KEGG_overlap) <- c('set', 'regulated_top', 'regulated_bottom')
+KEGG_overlap$set <-as.character(KEGG_overlap$set)
+KEGG_overlap$regulated_top <- as.numeric(KEGG_overlap$regulated_top)
+KEGG_overlap$regulated_bottom <- as.numeric(KEGG_overlap$regulated_bottom)
+
+for (set in kegg_gmt)
+{
+  contingency_table <- make_contingency(regulated_top, set)
+  fisher_results <- fisher.test(contingency_table)
+  top<- fisher_results$p.value
+  contingency_table <- make_contingency(regulated_bottom, set)
+  fisher_results <- fisher.test(contingency_table)
+  bottom<- fisher_results$p.value
+  
+ 
+  KEGG_overlap[nrow(KEGG_overlap) + 1,] = c(set@setName, top, bottom)
+}
+
+KEGG_overlap
+```
+
+```{r for hallmark}
+make_contingency(de_genes, hallmark_gmt[['HALLMARK_TNFA_SIGNALING_VIA_NFKB']])
+
+hallmark_overlap <- data.frame(matrix(ncol = 3, nrow=0))
+
+colnames(KEGG_overlap) <- c('set', 'regulated_top', 'regulated_bottom')
+hallmark_overlap$set <-as.character(hallmark_overlap$set)
+hallmark_overlap$regulated_top <- as.numeric(hallmark_overlap$regulated_top)
+hallmark_overlap$regulated_bottom <- as.numeric(hallmark_overlap$regulated_bottom)
+
+for (set in hallmark_gmt)
+{
+  contingency_table <- make_contingency(regulated_top, set)
+  fisher_results <- fisher.test(contingency_table)
+  top<- fisher_results$p.value
+  contingency_table <- make_contingency(regulated_bottom, set)
+  fisher_results <- fisher.test(contingency_table)
+  bottom<- fisher_results$p.value
+  
+ 
+  hallmark_overlap[nrow(hallmark_overlap) + 1,] = c(set@setName, top, bottom)
+}
+
+hallmark_overlap
+```
+```{r for GO}
+make_contingency(de_genes, go_gmt[['GOBP_REPRODUCTION']])
+
+go_overlap <- data.frame(matrix(ncol = 3, nrow=0))
+
+colnames(KEGG_overlap) <- c('set', 'regulated_top', 'regulated_bottom')
+go_overlap$set <-as.character(go_overlap$set)
+go_overlap$regulated_top <- as.numeric(go_overlap$regulated_top)
+go_overlap$regulated_bottom <- as.numeric(go_overlap$regulated_bottom)
+
+for (set in go_gmt)
+{
+  contingency_table <- make_contingency(regulated_top, set)
+  fisher_results <- fisher.test(contingency_table)
+  top<- fisher_results$p.value
+  contingency_table <- make_contingency(regulated_bottom, set)
+  fisher_results <- fisher.test(contingency_table)
+  bottom<- fisher_results$p.value
+  
+ 
+  go_overlap[nrow(go_overlap) + 1,] = c(set@setName, top, bottom)
+}
+
+go_overlap
+```
+
+```{r}
+library('stats')
+KEGG_top_1000 <- KEGG_overlap[, c('set', 'regulated_top')]
+colnames(KEGG_top_1000) <- c('set','p')
+KEGG_bot_1000 <- KEGG_overlap[, c('set', 'regulated_bottom')]
+colnames(KEGG_bot_1000) <- c('set','p')
+
+hallmark_top_1000 <- hallmark_overlap[, c('set', 'regulated_top')]
+colnames(hallmark_top_1000) <- c('set','p')
+hallmark_bot_1000 <- hallmark_overlap[, c('set', 'regulated_bottom')]
+colnames(hallmark_bot_1000) <- c('set','p')
+
+go_top_1000 <- go_overlap[, c('set', 'regulated_top')]
+colnames(go_top_1000) <- c('set','p')
+go_bot_1000 <- go_overlap[, c('set', 'regulated_bottom')]
+colnames(go_bot_1000) <- c('set','p')
+
+KEGG_top_1000['p_adj'] <- p.adjust(KEGG_top_1000$p, method = 'fdr')
+KEGG_bot_1000['p_adj'] <- p.adjust(KEGG_bot_1000$p, method = 'fdr')
+
+hallmark_top_1000['p_adj'] <- p.adjust(hallmark_top_1000$p, method = 'fdr')
+hallmark_bot_1000['p_adj'] <- p.adjust(hallmark_bot_1000$p, method = 'fdr')
+
+go_top_1000['p_adj'] <- p.adjust(go_top_1000$p, method = 'fdr')
+go_bot_1000['p_adj'] <- p.adjust(go_bot_1000$p, method = 'fdr')
+
+hallmark_top_1000 <- hallmark_top_1000[order(hallmark_top_1000$p),]
+hallmark_bot_1000 <- hallmark_bot_1000[order(hallmark_bot_1000$p),]
+
+KEGG_top_1000 <- KEGG_top_1000[order(KEGG_top_1000$p),]
+KEGG_bot_1000 <- KEGG_bot_1000[order(KEGG_bot_1000$p),]
+
+go_top_1000 <- go_top_1000[order(go_top_1000$p),]
+go_bot_1000 <- go_bot_1000[order(go_bot_1000$p),]
+
+go_bot_1000
+go_top_1000
+```
+```{r}
+go_filtered_top <- filter(go_top_1000, p_adj<0.05)
+go_filtered_bot <- filter(go_bot_1000, p_adj<0.05)
+go_filtered_top
+go_filtered_bot
+```
+
+```{r}
+go_overlap_ord <- go_top_1000[order(go_top_1000$p_adj, decreasing=FALSE),]
+go_bot3<-head(go_overlap_ord, 3)
+go_bot3
+```
+
+```{r for go bottom 1000}
+
+go_overlap_ord <- go_bot_1000[order(go_bot_1000$p_adj, decreasing=FALSE),]
+go_bot3<-head(go_overlap_ord, 3)
+go_bot3
+```
+
+```{r for go top 1000}
+
+go_overlap_ord2 <- go_top_1000[order(go_top_1000$p_adj, decreasing=FALSE),]
+go_top3<-head(go_overlap_ord2, 3)
+go_top3
+```
+
+```{r}
+KEGG_bot_1000
+KEGG_top_1000
+kegg_filtered_top <- filter(KEGG_top_1000, p_adj<0.05)
+kegg_filtered_bot <- filter(KEGG_bot_1000, p_adj<0.05)
+kegg_filtered_top
+kegg_filtered_bot
+```
+
+
+```{r for kegg top 1000}
+
+KEGG_overlap_ord <- KEGG_top_1000[order(KEGG_top_1000$p_adj, decreasing=FALSE),]
+kegg_top3<- head(KEGG_overlap_ord, 3)
+kegg_top3
+```
+
+```{r for kegg bottom 1000}
+
+KEGG_overlap_ord2 <- KEGG_bot_1000[order(KEGG_bot_1000$p_adj, decreasing=FALSE),]
+kegg_bot3<-head(KEGG_overlap_ord2, 3)
+kegg_bot3
+```
+
+```{r}
+hallmark_bot_1000
+hallmark_top_1000
+hall_filtered_top <- filter(hallmark_top_1000, p_adj<0.05)
+hall_filtered_bot <- filter(hallmark_bot_1000, p_adj<0.05)
+hall_filtered_top
+hall_filtered_bot
+```
+
+```{r for hallmark top 1000}
+
+hallmark_overlap_ord <- hallmark_top_1000[order(hallmark_top_1000$p_adj, decreasing=FALSE),]
+hall_top3<-head(hallmark_overlap_ord, 3)
+hall_top3
+```
+```{r for kegg bottom 1000}
+
+hallmark_overlap_ord2 <- hallmark_bot_1000[order(hallmark_bot_1000$p_adj, decreasing=FALSE),]
+hall_bot3<-head(hallmark_overlap_ord2, 3)
+hall_bot3
+```
+```{r}
+up_reg <- rbind(hall_top3, go_top3, kegg_top3)
+up_reg
+
+```
+
+
+```{r}
+down_reg <- rbind(hall_bot3, go_bot3, kegg_bot3)
+down_reg
+```
+
+
